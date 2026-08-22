@@ -11,7 +11,7 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
       - name: Build with Gradle
-        run: gradle assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon -Pksp.useNewProcessing=false
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
