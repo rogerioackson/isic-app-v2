@@ -1,0 +1,6 @@
+{
+  "name": "iSiC",
+  "description": "Sistema de Controle de Estoque Técnico e Inventário ADT",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
