@@ -10,8 +10,8 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-      - name: Generate Gradle Wrapper 8.5
-        run: gradle wrapper --gradle-version 8.5
+      - name: Generate Gradle Wrapper 9.3.1
+        run: gradle wrapper --gradle-version 9.3.1
       - name: Generate debug keystore
         run: keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
       - name: Build with Gradle Wrapper
