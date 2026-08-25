@@ -1,136 +1,251 @@
-package com.example.viewmodel
+package com.example.data.repository
 
-import android.app.Application
-import android.content.Context
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import com.example.data.database.IsicDatabase
 import com.example.data.model.Client
 import com.example.data.model.InventoryItem
 import com.example.data.model.ItemCondition
+import com.example.data.model.MovementItem
+import com.example.data.model.MovementType
 import com.example.data.model.StockMovement
-import com.example.data.repository.IsicRepository
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
-class IsicViewModel(application: Application) : AndroidViewModel(application) {
+class IsicRepository(private val database: IsicDatabase) {
 
-    private val database = IsicDatabase.getDatabase(application)
-    private val repository = IsicRepository(database)
-    private val sharedPrefs = application.getSharedPreferences("isic_prefs", Context.MODE_PRIVATE)
+    private val inventoryDao = database.inventoryDao()
+    private val clientDao = database.clientDao()
+    private val movementDao = database.movementDao()
 
-    val allItems: Flow<List<InventoryItem>> = repository.allItems
-    val allClients: Flow<List<Client>> = repository.allClients
-    val allMovements: Flow<List<StockMovement>> = repository.allMovements
-    val recentMovements: Flow<List<StockMovement>> = repository.recentMovements
+    val allItems: Flow<List<InventoryItem>> = inventoryDao.getAllItemsFlow()
+    val allClients: Flow<List<Client>> = clientDao.getAllClientsFlow()
+    val allMovements: Flow<List<StockMovement>> = movementDao.getAllMovementsFlow()
+    val recentMovements: Flow<List<StockMovement>> = movementDao.getRecentMovementsFlow()
 
-    val totalCurrentStock = repository.totalCurrentStock.stateIn(
-        viewModelScope, SharingStarted.WhileSubscribed(5000), 0
-    )
-    val totalThirdPartyCustody = repository.totalThirdPartyCustody.stateIn(
-        viewModelScope, SharingStarted.WhileSubscribed(5000), 0
-    )
+    val totalCurrentStock: Flow<Int?> = inventoryDao.getTotalCurrentStockFlow()
+    val totalThirdPartyCustody: Flow<Int?> = inventoryDao.getTotalThirdPartyCustodyFlow()
 
-    fun getTechnicianName(): String {
-        return sharedPrefs.getString("technician_name", "Rogério Ackson Santos") ?: "Rogério Ackson Santos"
+    fun searchItems(query: String): Flow<List<InventoryItem>> = inventoryDao.searchItemsFlow(query)
+    fun searchClients(query: String): Flow<List<Client>> = clientDao.searchClientsFlow(query)
+
+    suspend fun getItemByCode(code: String): InventoryItem? = inventoryDao.getItemByCode(code)
+    suspend fun getItemsForMovement(movementId: Long): List<MovementItem> = movementDao.getItemsForMovement(movementId)
+
+    suspend fun getSummaryCounts(): Triple<Int, Int, Int> {
+        val items = inventoryDao.getItemsCount()
+        val clients = clientDao.getClientsCount()
+        val movements = movementDao.getMovementsCount()
+        return Triple(items, clients, movements)
     }
 
-    fun saveTechnicianName(name: String) {
-        sharedPrefs.edit().putString("technician_name", name.ifBlank { "Rogério Ackson Santos" }).apply()
-    }
-
-    fun searchItems(query: String): Flow<List<InventoryItem>> = repository.searchItems(query)
-    fun searchClients(query: String): Flow<List<Client>> = repository.searchClients(query)
-
-    suspend fun getItemByCode(code: String): InventoryItem? = repository.getItemByCode(code)
-    suspend fun getItemsForMovement(movementId: Long) = repository.getItemsForMovement(movementId)
-    suspend fun getSummaryCounts() = repository.getSummaryCounts()
-
-    fun registerExit(
+    suspend fun registerExit(
         clientName: String,
+        technicianName: String,
         osNumber: String,
         notes: String,
-        itemsToExit: List<Pair<InventoryItem, Int>>,
-        onComplete: (Long) -> Unit
-    ) {
-        val techName = getTechnicianName()
-        viewModelScope.launch {
-            val id = repository.registerExit(clientName, techName, osNumber, notes, itemsToExit)
-            onComplete(id)
+        itemsToExit: List<Pair<InventoryItem, Int>>
+    ): Long {
+        val timestamp = System.currentTimeMillis()
+        val totalCount = itemsToExit.sumOf { it.second }
+        val finalTech = technicianName.ifBlank { "Rogério Ackson Santos" }
+
+        val movement = StockMovement(
+            movementType = MovementType.SAIDA,
+            osNumber = osNumber.ifBlank { "OS-${System.currentTimeMillis() % 100000}" },
+            clientName = clientName,
+            technicianName = finalTech,
+            timestamp = timestamp,
+            totalItemsCount = totalCount,
+            notes = notes,
+            status = "CONCLUÍDO"
+        )
+
+        val movementId = movementDao.insertMovement(movement)
+
+        val movementItems = itemsToExit.map { (item, qty) ->
+            MovementItem(
+                movementId = movementId,
+                itemCode = item.code,
+                itemName = item.name,
+                quantity = qty,
+                condition = ItemCondition.BOM_ESTADO
+            )
         }
+        movementDao.insertMovementItems(movementItems)
+
+        for ((item, qty) in itemsToExit) {
+            inventoryDao.registerItemExit(item.code, qty, timestamp)
+        }
+
+        return movementId
     }
 
-    fun registerAdReposition(
+    suspend fun registerAdReposition(
+        technicianName: String,
         osOrReference: String,
         notes: String,
-        itemsToReturn: List<Triple<InventoryItem, Int, ItemCondition>>,
-        onComplete: (Long) -> Unit
-    ) {
-        val techName = getTechnicianName()
-        viewModelScope.launch {
-            val id = repository.registerAdReposition(techName, osOrReference, notes, itemsToReturn)
-            onComplete(id)
+        itemsToReturn: List<Triple<InventoryItem, Int, ItemCondition>>
+    ): Long {
+        val timestamp = System.currentTimeMillis()
+        val totalCount = itemsToReturn.sumOf { it.second }
+        val finalTech = technicianName.ifBlank { "Rogério Ackson Santos" }
+
+        val movement = StockMovement(
+            movementType = MovementType.REPOSICAO_AD,
+            osNumber = osOrReference.ifBlank { "REP-${System.currentTimeMillis() % 100000}" },
+            clientName = "Almoxarifado Central ADT",
+            technicianName = finalTech,
+            timestamp = timestamp,
+            totalItemsCount = totalCount,
+            notes = notes,
+            status = "CONCLUÍDO"
+        )
+
+        val movementId = movementDao.insertMovement(movement)
+
+        val movementItems = itemsToReturn.map { (item, qty, condition) ->
+            MovementItem(
+                movementId = movementId,
+                itemCode = item.code,
+                itemName = item.name,
+                quantity = qty,
+                condition = condition
+            )
         }
-    }
+        movementDao.insertMovementItems(movementItems)
 
-    fun updateStockManual(itemId: Long, currentStock: Int, thirdPartyCustody: Int) {
-        viewModelScope.launch {
-            repository.updateStockManual(itemId, currentStock, thirdPartyCustody)
+        for ((item, qty, condition) in itemsToReturn) {
+            when (condition) {
+                ItemCondition.BOM_ESTADO, ItemCondition.COM_DEFEITO, ItemCondition.SUCATA -> {
+                    inventoryDao.registerItemReturnToStock(item.code, qty, timestamp)
+                }
+                ItemCondition.INSTALADO_CLIENTE -> {
+                    inventoryDao.registerItemInstalledAtClient(item.code, qty, timestamp)
+                }
+            }
         }
+
+        return movementId
     }
 
-    fun insertItem(item: InventoryItem, onComplete: () -> Unit = {}) {
-        viewModelScope.launch {
-            repository.insertItem(item)
-            onComplete()
+    suspend fun updateStockManual(itemId: Long, currentStock: Int, thirdPartyCustody: Int) {
+        inventoryDao.updateStockManual(itemId, currentStock, thirdPartyCustody, System.currentTimeMillis())
+    }
+
+    suspend fun insertItem(item: InventoryItem): Long = inventoryDao.insertItem(item)
+    suspend fun updateItem(item: InventoryItem) = inventoryDao.updateItem(item)
+    suspend fun deleteItem(item: InventoryItem) = inventoryDao.deleteItem(item)
+
+    suspend fun insertClient(client: Client): Long = clientDao.insertClient(client)
+
+    suspend fun resetDatabase() {
+        inventoryDao.clearAllItems()
+        clientDao.clearClients()
+        movementDao.clearAllMovements()
+    }
+
+    suspend fun exportDataJson(items: List<InventoryItem>, movements: List<StockMovement>): String {
+        val root = JSONObject()
+        root.put("app", "iSiC - ADT Controle Técnico")
+        root.put("exportedAt", System.currentTimeMillis())
+
+        val itemsArray = JSONArray()
+        for (item in items) {
+            val obj = JSONObject()
+            obj.put("code", item.code)
+            obj.put("name", item.name)
+            obj.put("category", item.category)
+            obj.put("unit", item.unit)
+            obj.put("currentStock", item.currentStock)
+            obj.put("thirdPartyCustody", item.thirdPartyCustody)
+            obj.put("targetStock", item.targetStock)
+            obj.put("location", item.location)
+            itemsArray.put(obj)
         }
+        root.put("items", itemsArray)
+        return root.toString(2)
     }
 
-    fun updateItem(item: InventoryItem, onComplete: () -> Unit = {}) {
-        viewModelScope.launch {
-            repository.updateItem(item)
-            onComplete()
+    suspend fun importDataJson(jsonString: String): Int {
+        val root = JSONObject(jsonString)
+        val itemsArray = root.optJSONArray("items") ?: return 0
+        val importedItems = mutableListOf<InventoryItem>()
+
+        for (i in 0 until itemsArray.length()) {
+            val obj = itemsArray.getJSONObject(i)
+            val item = InventoryItem(
+                code = obj.getString("code"),
+                name = obj.getString("name"),
+                category = obj.optString("category", "Geral"),
+                unit = obj.optString("unit", "UN"),
+                currentStock = obj.optInt("currentStock", 0),
+                thirdPartyCustody = obj.optInt("thirdPartyCustody", 0),
+                targetStock = obj.optInt("targetStock", 10),
+                location = obj.optString("location", "Almoxarifado")
+            )
+            importedItems.add(item)
         }
-    }
 
-    fun deleteItem(item: InventoryItem) {
-        viewModelScope.launch {
-            repository.deleteItem(item)
+        if (importedItems.isNotEmpty()) {
+            inventoryDao.insertItems(importedItems)
         }
+        return importedItems.size
     }
 
-    fun insertClient(client: Client, onComplete: () -> Unit = {}) {
-        viewModelScope.launch {
-            repository.insertClient(client)
-            onComplete()
+    suspend fun importInventoryCsv(csvString: String): Int {
+        val lines = csvString.lines()
+        if (lines.isEmpty()) return 0
+        
+        val importedItems = mutableListOf<InventoryItem>()
+        var startIndex = 0
+
+        if (lines[0].uppercase().contains("CODIGO") || lines[0].uppercase().contains("NOME")) {
+            startIndex = 1
         }
-    }
 
-    fun resetDatabase() {
-        viewModelScope.launch {
-            repository.resetDatabase()
+        for (i in startIndex until lines.size) {
+            val line = lines[i].trim()
+            if (line.isBlank()) continue
+
+            val cols = line.split(";")
+            if (cols.size >= 2) {
+                val code = cols[0].trim().ifBlank { "ADT-${System.currentTimeMillis() % 10000}" }
+                val name = cols[1].trim()
+                val category = if (cols.size > 2) cols[2].trim().ifBlank { "Poder de Terceiros" } else "Poder de Terceiros"
+                val unit = if (cols.size > 3) cols[3].trim().ifBlank { "UN" } else "UN"
+                val currentStock = if (cols.size > 4) cols[4].trim().toIntOrNull() ?: 0 else 0
+                val thirdPartyCustody = if (cols.size > 5) cols[5].trim().toIntOrNull() ?: 0 else 0
+                val targetStock = if (cols.size > 7) cols[7].trim().toIntOrNull() ?: maxOf(10, thirdPartyCustody) else maxOf(10, thirdPartyCustody)
+                val location = if (cols.size > 8) cols[8].trim().ifBlank { "Poder de Terceiros" } else "Poder de Terceiros"
+
+                importedItems.add(
+                    InventoryItem(
+                        code = code,
+                        name = name,
+                        category = category,
+                        unit = unit,
+                        currentStock = currentStock,
+                        thirdPartyCustody = thirdPartyCustody,
+                        targetStock = targetStock,
+                        location = location
+                    )
+                )
+            }
         }
+
+        if (importedItems.isNotEmpty()) {
+            inventoryDao.insertItems(importedItems)
+        }
+        return importedItems.size
     }
 
-    suspend fun exportJsonBackup(): String {
-        val items = mutableListOf<InventoryItem>() // Poderia coletar do fluxo se necessário
-        val movements = mutableListOf<StockMovement>()
-        return repository.exportDataJson(items, movements)
-    }
-
-    suspend fun importJsonData(json: String): Int {
-        return repository.importDataJson(json)
-    }
-
-    suspend fun importCsvData(csvString: String): Int {
-        return repository.importInventoryCsv(csvString)
-    }
-
-    suspend fun exportCsvData(): String {
-        // Coleta os itens atuais para exportar
-        val items = database.inventoryDao().getAllItemsList()
-        return repository.exportInventoryCsv(items)
+    suspend fun exportInventoryCsv(items: List<InventoryItem>): String {
+        val sb = StringBuilder()
+        sb.append("CODIGO;NOME;CATEGORIA;UNIDADE;ESTOQUE_ATUAL;PODER_TERCEIRO;TOTAL_FISICO;META_ESTOQUE;LOCALIZACAO\n")
+        for (it in items) {
+            val totalFisico = it.currentStock + it.thirdPartyCustody
+            sb.append("${it.code};${it.name};${it.category};${it.unit};${it.currentStock};${it.thirdPartyCustody};$totalFisico;${it.targetStock};${it.location}\n")
+        }
+        return sb.toString()
     }
 }
