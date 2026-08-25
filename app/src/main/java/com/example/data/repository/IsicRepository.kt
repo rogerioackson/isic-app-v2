@@ -52,7 +52,7 @@ class IsicRepository(private val database: IsicDatabase) {
             movementType = MovementType.SAIDA,
             osNumber = osNumber.ifBlank { "OS-${System.currentTimeMillis() % 100000}" },
             clientName = clientName,
-            technicianName = technicianName,
+            technicianName = technicianName.ifBlank { "Técnico Padrão" },
             timestamp = timestamp,
             totalItemsCount = totalCount,
             notes = notes,
@@ -91,8 +91,8 @@ class IsicRepository(private val database: IsicDatabase) {
         val movement = StockMovement(
             movementType = MovementType.REPOSICAO_AD,
             osNumber = osOrReference.ifBlank { "REP-${System.currentTimeMillis() % 100000}" },
-            clientName = "Almoxarifado ADT Central",
-            technicianName = technicianName,
+            clientName = "Almoxarifado Central ADT",
+            technicianName = technicianName.ifBlank { "Técnico Padrão" },
             timestamp = timestamp,
             totalItemsCount = totalCount,
             notes = notes,
@@ -137,19 +137,21 @@ class IsicRepository(private val database: IsicDatabase) {
     suspend fun insertClient(client: Client): Long = clientDao.insertClient(client)
 
     /**
-     * Catálogo inicial de materiais ADT para o inventário técnico.
+     * Catálogo inicial de materiais ADT para o inventário técnico e poder de terceiro.
      */
     suspend fun loadAdtSampleCatalog() {
-        val count = inventoryDao.getItemsCount()
-        if (count == 0) {
-            val defaultItems = listOf(
-                InventoryItem(code = "CNT-01", name = "Central de Alarme ADT", category = "Centrais", unit = "UN", currentStock = 5, targetStock = 10, location = "Almoxarifado"),
-                InventoryItem(code = "SNS-01", name = "Sensor Infravermelho (IVP)", category = "Sensores", unit = "UN", currentStock = 15, targetStock = 20, location = "Almoxarifado"),
-                InventoryItem(code = "MAG-01", name = "Contato Magnético de Abertura", category = "Acessórios", unit = "UN", currentStock = 30, targetStock = 40, location = "Almoxarifado"),
-                InventoryItem(code = "SRN-01", name = "Sirene Piezoelétrica", category = "Acessórios", unit = "UN", currentStock = 8, targetStock = 12, location = "Almoxarifado"),
-                InventoryItem(code = "BAT-01", name = "Bateria Selada 12V 7A", category = "Alimentação", unit = "UN", currentStock = 10, targetStock = 15, location = "Almoxarifado")
-            )
-            inventoryDao.insertItems(defaultItems)
+        val defaultItems = listOf(
+            InventoryItem(code = "CNT-01", name = "Central de Alarme ADT", category = "Centrais", unit = "UN", currentStock = 5, thirdPartyCustody = 2, targetStock = 10, location = "Almoxarifado"),
+            InventoryItem(code = "SNS-01", name = "Sensor Infravermelho (IVP)", category = "Sensores", unit = "UN", currentStock = 15, thirdPartyCustody = 8, targetStock = 20, location = "Almoxarifado"),
+            InventoryItem(code = "MAG-01", name = "Contato Magnético de Abertura", category = "Acessórios", unit = "UN", currentStock = 30, thirdPartyCustody = 12, targetStock = 40, location = "Almoxarifado"),
+            InventoryItem(code = "SRN-01", name = "Sirene Piezoelétrica", category = "Acessórios", unit = "UN", currentStock = 8, thirdPartyCustody = 3, targetStock = 12, location = "Almoxarifado"),
+            InventoryItem(code = "BAT-01", name = "Bateria Selada 12V 7A", category = "Alimentação", unit = "UN", currentStock = 10, thirdPartyCustody = 5, targetStock = 15, location = "Almoxarifado")
+        )
+        for (item in defaultItems) {
+            val existing = inventoryDao.getItemByCode(item.code)
+            if (existing == null) {
+                inventoryDao.insertItem(item)
+            }
         }
     }
 
@@ -180,21 +182,6 @@ class IsicRepository(private val database: IsicDatabase) {
             itemsArray.put(obj)
         }
         root.put("items", itemsArray)
-
-        val movementsArray = JSONArray()
-        for (mov in movements) {
-            val obj = JSONObject()
-            obj.put("movementType", mov.movementType.name)
-            obj.put("osNumber", mov.osNumber)
-            obj.put("clientName", mov.clientName)
-            obj.put("technicianName", mov.technicianName)
-            obj.put("timestamp", mov.timestamp)
-            obj.put("totalItemsCount", mov.totalItemsCount)
-            obj.put("notes", mov.notes)
-            movementsArray.put(obj)
-        }
-        root.put("movements", movementsArray)
-
         return root.toString(2)
     }
 
@@ -213,10 +200,7 @@ class IsicRepository(private val database: IsicDatabase) {
                 currentStock = obj.optInt("currentStock", 0),
                 thirdPartyCustody = obj.optInt("thirdPartyCustody", 0),
                 targetStock = obj.optInt("targetStock", 10),
-                totalOutCount = obj.optInt("totalOutCount", 0),
-                totalReturnCount = obj.optInt("totalReturnCount", 0),
-                location = obj.optString("location", "Almoxarifado"),
-                description = obj.optString("description", "")
+                location = obj.optString("location", "Almoxarifado")
             )
             importedItems.add(item)
         }
@@ -229,9 +213,9 @@ class IsicRepository(private val database: IsicDatabase) {
 
     suspend fun exportInventoryCsv(items: List<InventoryItem>): String {
         val sb = StringBuilder()
-        sb.append("CODIGO;NOME;CATEGORIA;UNIDADE;ESTOQUE_ATUAL;PODER_TERCEIRO;TOTAL_FISICO;META_ESTOQUE;DIFERENCA;TOTAL_SAIDAS;TOTAL_RETORNOS;TAXA_UTILIZACAO_PCT;LOCALIZACAO\n")
+        sb.append("CODIGO;NOME;CATEGORIA;UNIDADE;ESTOQUE_ATUAL;PODER_TERCEIRO;TOTAL_FISICO;META_ESTOQUE;LOCALIZACAO\n")
         for (it in items) {
-            sb.append("${it.code};${it.name};${it.category};${it.unit};${it.currentStock};${it.thirdPartyCustody};${it.totalPhysical};${it.targetStock};${it.stockDifference};${it.totalOutCount};${it.totalReturnCount};${it.utilizationRatePercent}%;${it.location}\n")
+            sb.append("${it.code};${it.name};${it.category};${it.unit};${it.currentStock};${it.thirdPartyCustody};${it.totalPhysical};${it.targetStock};${it.location}\n")
         }
         return sb.toString()
     }
