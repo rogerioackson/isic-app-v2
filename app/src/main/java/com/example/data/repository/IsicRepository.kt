@@ -144,7 +144,6 @@ class IsicRepository(private val database: IsicDatabase) {
         if (count == 0) {
             val defaultItems = listOf(
                 InventoryItem(code = "CNT-01", name = "Central de Alarme ADT", category = "Centrais", unit = "UN", currentStock = 5, targetStock = 10, location = "Almoxarifado"),
-                navIndex = 0,
                 InventoryItem(code = "SNS-01", name = "Sensor Infravermelho (IVP)", category = "Sensores", unit = "UN", currentStock = 15, targetStock = 20, location = "Almoxarifado"),
                 InventoryItem(code = "MAG-01", name = "Contato Magnético de Abertura", category = "Acessórios", unit = "UN", currentStock = 30, targetStock = 40, location = "Almoxarifado"),
                 InventoryItem(code = "SRN-01", name = "Sirene Piezoelétrica", category = "Acessórios", unit = "UN", currentStock = 8, targetStock = 12, location = "Almoxarifado"),
