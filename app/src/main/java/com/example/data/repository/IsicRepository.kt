@@ -38,6 +38,18 @@ class IsicRepository(private val database: IsicDatabase) {
         return Triple(items, clients, movements)
     }
 
+    suspend fun loadAdSampleCatalog() {
+        val count = inventoryDao.getItemsCount()
+        if (count == 0) {
+            val sampleItems = listOf(
+                InventoryItem(code = "ADT-001", name = "Cabo Coaxial RG6", category = "Poder de Terceiros", unit = "MT", currentStock = 0, thirdPartyCustody = 100, targetStock = 100, location = "Almoxarifado"),
+                InventoryItem(code = "ADT-002", name = "Conector F de Compressão", category = "Poder de Terceiros", unit = "UN", currentStock = 0, thirdPartyCustody = 50, targetStock = 50, location = "Almoxarifado"),
+                InventoryItem(code = "ADT-003", name = "Fonte 12V 1A", category = "Poder de Terceiros", unit = "UN", currentStock = 0, thirdPartyCustody = 10, targetStock = 10, location = "Almoxarifado")
+            )
+            inventoryDao.insertItems(sampleItems)
+        }
+    }
+
     suspend fun registerExit(
         clientName: String,
         technicianName: String,
